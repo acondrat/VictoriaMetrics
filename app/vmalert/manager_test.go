@@ -2,12 +2,20 @@ package main
 
 import (
 	"context"
-	"math/rand"
+	"net/url"
+	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
+
+	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/notifier"
 )
+
+func TestMain(m *testing.M) {
+	u, _ := url.Parse("https://victoriametrics.com/path")
+	notifier.InitTemplateFunc(u)
+	os.Exit(m.Run())
+}
 
 func TestManagerUpdateError(t *testing.T) {
 	m := &manager{groups: make(map[uint64]*Group)}
@@ -22,48 +30,77 @@ func TestManagerUpdateError(t *testing.T) {
 	}
 }
 
-// TestManagerUpdateConcurrent supposed to test concurrent
-// execution of configuration update.
-// Should be executed with -race flag
-func TestManagerUpdateConcurrent(t *testing.T) {
-	m := &manager{
-		groups:   make(map[uint64]*Group),
-		storage:  &fakeQuerier{},
-		notifier: &fakeNotifier{},
-	}
-	paths := []string{
-		"testdata/dir/rules0-good.rules",
-		"testdata/dir/rules1-good.rules",
-		"testdata/rules0-good.rules",
-	}
-	*evaluationInterval = time.Millisecond
-	if err := m.start(context.Background(), []string{paths[0]}, true); err != nil {
-		t.Fatalf("failed to start: %s", err)
-	}
-
-	const workers = 500
-	const iterations = 10
-	wg := sync.WaitGroup{}
-	wg.Add(workers)
-	for i := 0; i < workers; i++ {
-		go func() {
-			defer wg.Done()
-			for i := 0; i < iterations; i++ {
-				rnd := rand.Intn(len(paths))
-				path := []string{paths[rnd]}
-				err := m.update(context.Background(), path, true, false)
-				if err != nil {
-					t.Errorf("update error: %s", err)
-				}
-			}
-		}()
-	}
-	wg.Wait()
-}
+//TestManagerUpdateConcurrent supposed to test concurrent
+//execution of configuration update.
+//Should be executed with -race flag
+//func TestManagerUpdateConcurrent(t *testing.T) {
+//	m := &manager{
+//		groups:   make(map[uint64]*Group),
+//		storage:  &fakeQuerier{},
+//		notifier: &fakeNotifier{},
+//	}
+//	paths := []string{
+//		"config/testdata/dir/rules0-good.rules",
+//		"config/testdata/dir/rules0-bad.rules",
+//		"config/testdata/dir/rules1-good.rules",
+//		"config/testdata/dir/rules1-bad.rules",
+//		"config/testdata/rules0-good.rules",
+//		"config/testdata/rules1-good.rules",
+//		"config/testdata/rules2-good.rules",
+//	}
+//	*evaluationInterval = time.Millisecond
+//	if err := m.start(context.Background(), []string{paths[0]}, true); err != nil {
+//		t.Fatalf("failed to start: %s", err)
+//	}
+//
+//	const workers = 500
+//	const iterations = 10
+//	wg := sync.WaitGroup{}
+//	wg.Add(workers)
+//	for i := 0; i < workers; i++ {
+//		go func() {
+//			defer wg.Done()
+//			for i := 0; i < iterations; i++ {
+//				rnd := rand.Intn(len(paths))
+//				path := []string{paths[rnd]}
+//				_ = m.update(context.Background(), path, true, false)
+//			}
+//		}()
+//	}
+//	wg.Wait()
+//}
 
 // TestManagerUpdate tests sequential configuration
 // updates.
 func TestManagerUpdate(t *testing.T) {
+	var (
+		VMRows = &AlertingRule{
+			Name: "VMRows",
+			Expr: "vm_rows > 0",
+			For:  10 * time.Second,
+			Labels: map[string]string{
+				"label": "bar",
+				"host":  "{{ $labels.instance }}",
+			},
+			Annotations: map[string]string{
+				"summary":     "{{ $value|humanize }}",
+				"description": "{{$labels}}",
+			},
+		}
+		Conns = &AlertingRule{
+			Name: "Conns",
+			Expr: "sum(vm_tcplistener_conns) by(instance) > 1",
+			Annotations: map[string]string{
+				"summary":     "Too high connection number for {{$labels.instance}}",
+				"description": "It is {{ $value }} connections for {{$labels.instance}}",
+			},
+		}
+		ExampleAlertAlwaysFiring = &AlertingRule{
+			Name: "ExampleAlertAlwaysFiring",
+			Expr: "sum by(job) (up == 1)",
+		}
+	)
+
 	testCases := []struct {
 		name       string
 		initPath   string
@@ -72,49 +109,60 @@ func TestManagerUpdate(t *testing.T) {
 	}{
 		{
 			name:       "update good rules",
-			initPath:   "testdata/rules0-good.rules",
-			updatePath: "testdata/dir/rules1-good.rules",
+			initPath:   "config/testdata/rules0-good.rules",
+			updatePath: "config/testdata/dir/rules1-good.rules",
 			want: []*Group{
 				{
-					File:  "testdata/dir/rules1-good.rules",
-					Name:  "duplicatedGroupDiffFiles",
-					Rules: []*Rule{newTestRule("VMRows", time.Second*10)},
+					File: "config/testdata/dir/rules1-good.rules",
+					Name: "duplicatedGroupDiffFiles",
+					Rules: []Rule{
+						&AlertingRule{
+							Name:   "VMRows",
+							Expr:   "vm_rows > 0",
+							For:    5 * time.Minute,
+							Labels: map[string]string{"label": "bar"},
+							Annotations: map[string]string{
+								"summary":     "{{ $value }}",
+								"description": "{{$labels}}",
+							},
+						},
+					},
 				},
 			},
 		},
 		{
 			name:       "update good rules from 1 to 2 groups",
-			initPath:   "testdata/dir/rules1-good.rules",
-			updatePath: "testdata/rules0-good.rules",
+			initPath:   "config/testdata/dir/rules1-good.rules",
+			updatePath: "config/testdata/rules0-good.rules",
 			want: []*Group{
 				{
-					File: "testdata/rules0-good.rules",
-					Name: "groupGorSingleAlert", Rules: []*Rule{
-						newTestRule("VMRows", time.Second*10),
-					}},
+					File:  "config/testdata/rules0-good.rules",
+					Name:  "groupGorSingleAlert",
+					Rules: []Rule{VMRows},
+				},
 				{
-					File: "testdata/rules0-good.rules",
-					Name: "TestGroup", Rules: []*Rule{
-						newTestRule("Conns", time.Duration(0)),
-						newTestRule("ExampleAlertAlwaysFiring", time.Duration(0)),
+					File: "config/testdata/rules0-good.rules",
+					Name: "TestGroup", Rules: []Rule{
+						Conns,
+						ExampleAlertAlwaysFiring,
 					}},
 			},
 		},
 		{
 			name:       "update with one bad rule file",
-			initPath:   "testdata/rules0-good.rules",
-			updatePath: "testdata/dir/rules2-bad.rules",
+			initPath:   "config/testdata/rules0-good.rules",
+			updatePath: "config/testdata/dir/rules2-bad.rules",
 			want: []*Group{
 				{
-					File: "testdata/rules0-good.rules",
-					Name: "groupGorSingleAlert", Rules: []*Rule{
-						newTestRule("VMRows", time.Second*10),
-					}},
+					File:  "config/testdata/rules0-good.rules",
+					Name:  "groupGorSingleAlert",
+					Rules: []Rule{VMRows},
+				},
 				{
-					File: "testdata/rules0-good.rules",
-					Name: "TestGroup", Rules: []*Rule{
-						newTestRule("Conns", time.Duration(0)),
-						newTestRule("ExampleAlertAlwaysFiring", time.Duration(0)),
+					File: "config/testdata/rules0-good.rules",
+					Name: "TestGroup", Rules: []Rule{
+						Conns,
+						ExampleAlertAlwaysFiring,
 					}},
 			},
 		},
@@ -145,19 +193,5 @@ func TestManagerUpdate(t *testing.T) {
 			cancel()
 			m.close()
 		})
-	}
-}
-
-func compareGroups(t *testing.T, a, b *Group) {
-	t.Helper()
-	if len(a.Rules) != len(b.Rules) {
-		t.Fatalf("expected group %s to have %d rules; got: %d",
-			a.Name, len(a.Rules), len(b.Rules))
-	}
-	for i, r := range a.Rules {
-		got, want := r, b.Rules[i]
-		if got.Name != want.Name {
-			t.Fatalf("expected to have rule %q; got %q", want.Name, got.Name)
-		}
 	}
 }

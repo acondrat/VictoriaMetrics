@@ -53,8 +53,8 @@ type Config struct {
 
 const (
 	defaultMaxBatchSize  = 1e3
-	defaultMaxQueueSize  = 100
-	defaultFlushInterval = 5 * time.Second
+	defaultMaxQueueSize  = 1e4
+	defaultFlushInterval = time.Second
 	defaultWriteTimeout  = 30 * time.Second
 )
 
@@ -128,7 +128,7 @@ func (c *Client) run(ctx context.Context) {
 		for ts := range c.input {
 			wr.Timeseries = append(wr.Timeseries, ts)
 		}
-		lastCtx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		lastCtx, cancel := context.WithTimeout(context.Background(), defaultWriteTimeout)
 		c.flush(lastCtx, wr)
 		cancel()
 	}

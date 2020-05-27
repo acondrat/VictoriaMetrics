@@ -1,4 +1,4 @@
-## VM Alert
+## vmalert
 
 `vmalert` executes a list of given MetricsQL expressions (rules) and
 sends alerts to [Alert Manager](https://github.com/prometheus/alertmanager).   

@@ -57,7 +57,7 @@ test-vmalert:
 	go test -v -race -cover ./app/vmalert/notifier
 
 run-vmalert: vmalert
-	./bin/vmalert -rule=app/vmalert/testdata/rules0-good.rules \
+	./bin/vmalert -rule=app/vmalert/config/testdata/rules2-good.rules \
 		-datasource.url=http://localhost:8428 \
 		-notifier.url=http://localhost:9093 \
 		-remoteWrite.url=http://localhost:8428 \
